@@ -2,6 +2,8 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <pthread.h>
+
+extern "C" {
 #include <libavutil/opt.h>
 #include <libavcodec/avcodec.h>
 #include <libavutil/channel_layout.h>
@@ -9,9 +11,13 @@
 #include <libavutil/imgutils.h>
 #include <libavutil/mathematics.h>
 #include <libavutil/samplefmt.h>
+#include <libswscale/swscale.h>
+}
+#include <x264.h>
+#include <libavutil/pixfmt.h>
+
 #include <SDL2/SDL.h>
 #include <queue>
-
 
 
 using namespace std;
@@ -198,200 +204,213 @@ void *addInteg(void *ignore){
 }
 
 
+typedef unsigned char u8;
+
+
+Uint32 endianSafeBytemask(u8 r, u8 g, u8 b, u8 a){
+#if SDL_BYTEORDER == SDL_BIG_ENDIAN
+  return (r << 24) & (g << 16) & (b << 8) & (a << 0);
+#else
+  return (r << 0) & (g << 8) & (b << 16) & (a << 24);
+#endif
+}
+
 void *renderFrames(void *ignore){
+  fprintf(stderr, SDL_GetError()); fflush(stderr);
+  Uint32 windowFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN | SDL_WINDOW_BORDERLESS;
+  Uint32 rendererFlags = SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE;
+  //Uint32 windowFlags = 0;
+  //Uint32 rendererFlags = SDL_RENDERER_TARGETTEXTURE;
+  
+  
+  SDL_Window *renderContext = SDL_CreateWindow("", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1, 1, windowFlags);
+  fprintf(stderr, SDL_GetError()); fflush(stderr);
+  
+  SDL_Renderer *renderer = SDL_CreateRenderer(renderContext, -1, rendererFlags);
+  fprintf(stderr, SDL_GetError()); fflush(stderr);
+  
+  //*
   while(!addIntegDone || !addIntegOut->empty()){
     if(addIntegOut->empty()) continue;
     
     frame *rawFrame = addIntegOut->front();
     addIntegOut->pop();
     
-    Uint32 amask;
     
-#if SDL_BYTEORDER == SDL_BIG_ENDIAN
-    amask = 0x000000ff;
-#else
-    amask = 0xff000000;
-#endif
-    
-    SDL_Surface *image = SDL_CreateRGBSurface(0, 256, 144, 32, 0, 0, 0, amask);
+    SDL_Surface *image = SDL_CreateRGBSurface(0, 256, 144, 32, 0, 0, 0, 0xff);
+    fprintf(stderr, SDL_GetError()); fflush(stderr);
     
     for(int i = 0; i < 127; i++){
       for(int j = 0; j < 71; j++){
         Uint32 newPixel;
-        
-#if SDL_BYTEORDER == SDL_BIG_ENDIAN
-        newPixel = amask & (rawFrame->pixels[i][j][0] << 24) & 
-            (rawFrame->pixels[i][j][0] << 16) & (rawFrame->pixels[i][j][0] << 8);
-#else
-        newPixel = amask & (rawFrame->pixels[i][j][0] << 0) & 
-            (rawFrame->pixels[i][j][0] << 8) & (rawFrame->pixels[i][j][0] << 16);
-#endif
+        newPixel = endianSafeBytemask(rawFrame->pixels[i][j][0], 
+                                      rawFrame->pixels[i][j][1], 
+                                      rawFrame->pixels[i][j][2], 
+                                      0xff);
+        SDL_LockSurface(image);
         putpixel(image, 1 + 2*i, 1 + 2+j, newPixel);
+        SDL_UnlockSurface(image);
       }
     }
     
     delete rawFrame;
-    
+    SDL_RenderClear( renderer );
+    fprintf(stderr, SDL_GetError()); fflush(stderr);
+    //SDL_Surface *YUVSurface = SDL_ConvertSurfaceFormat(image, SDL_PIXELFORMAT_IYUV, 0);
+    //SDL_FreeSurface(image);
     renderFramesOut->push(image);
     
   }
+  /* */
   renderFramesDone = true;
+  
+  SDL_DestroyRenderer(renderer);
+  SDL_DestroyWindow(renderContext);
+  fprintf(stderr, SDL_GetError()); fflush(stderr);
+  
   return NULL;
 }
 
 
-//Copied from https://github.com/FFmpeg/FFmpeg/blob/n3.0/doc/examples/decoding_encoding.c
+//from https://github.com/FFmpeg/FFmpeg/blob/n3.0/doc/examples/decoding_encoding.c
 void *encodeToVideo(void *ignore){
+  
+  AVCodec *codec;
+  AVCodecContext *c= NULL;
+  int i, ret, got_output;
+  AVFrame *_frame;
+  AVPacket pkt;
+  uint8_t endcode[] = { 0, 0, 1, 0xb7 };
+  i = 0;
+  queue<SDL_Surface*> freeLater;
+
+  /* find the video encoder */
+  avcodec_register_all();
+  codec = avcodec_find_encoder(AV_CODEC_ID_H264);
+  if (!codec) {
+    fprintf(stderr, "Codec not found\n");
+    exit(1);
+  }
+    
+  c = avcodec_alloc_context3(codec);
+  if (!c) {
+    fprintf(stderr, "Could not allocate video codec context\n");
+    exit(1);
+  }
+    
+  /* put sample parameters */
+  c->bit_rate = 400000;
+  c->width = 256;
+  c->height = 144;
+  /* frames per second */
+  c->time_base = (AVRational){1,30};
+  /* emit one intra frame every frames*/
+  c->gop_size = 1;
+  c->max_b_frames = 0;
+  c->pix_fmt = AV_PIX_FMT_YUV420P;
+
+  av_opt_set(c->priv_data, "zerolatency", "veryfast", 0);
+
+  /* open codec */
+  if (avcodec_open2(c, codec, NULL) < 0) {
+    fprintf(stderr, "Could not open codec\n");
+    exit(1);
+  }
+
+  _frame = av_frame_alloc();
+  if (!_frame) {
+      fprintf(stderr, "Could not allocate video frame\n");
+      exit(1);
+  }
+  _frame->format = c->pix_fmt;
+  _frame->width  = c->width;
+  _frame->height = c->height;
+
+  /* the image can be allocated by any means and av_image_alloc() is
+  * just the most convenient way if av_malloc() is to be used */
+  ret = av_image_alloc(_frame->data, _frame->linesize, c->width, c->height,
+                         c->pix_fmt, 32);
+  if (ret < 0) {
+    fprintf(stderr, "Could not allocate raw picture buffer\n");
+    exit(1);
+  }
+  
   while(!renderFramesDone || !renderFramesOut->empty()){
     if(renderFramesOut->empty()) continue;
-    SDL_FreeSurface(renderFramesOut->front());
+    SDL_Surface *imageToEncode = renderFramesOut->front();
     renderFramesOut->pop();
-////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////
-    AVCodec *codec;
-    AVCodecContext *c= NULL;
-    int i, ret, x, y, got_output;
-    FILE *f;
-    AVFrame *_frame;
-    AVPacket pkt;
-    uint8_t endcode[] = { 0, 0, 1, 0xb7 };
-
-    printf("Encode video file %s\n", filename);
-
-    /* find the mpeg1 video encoder */
-    codec = avcodec_find_encoder(codec_id);
-    if (!codec) {
-        fprintf(stderr, "Codec not found\n");
-        exit(1);
-    }
-
-    c = avcodec_alloc_context3(codec);
-    if (!c) {
-        fprintf(stderr, "Could not allocate video codec context\n");
-        exit(1);
-    }
-
-    /* put sample parameters */
-    c->bit_rate = 400000;
-    /* resolution must be a multiple of two */
-    c->width = 256;
-    c->height = 144;
-    /* frames per second */
-    c->time_base = (AVRational){1,30};
-    /* emit one intra frame every ten frames
-     * check frame pict_type before passing frame
-     * to encoder, if frame->pict_type is AV_PICTURE_TYPE_I
-     * then gop_size is ignored and the output of encoder
-     * will always be I frame irrespective to gop_size
-     */
-    c->gop_size = 10;
-    c->max_b_frames = 1;
-    c->pix_fmt = AV_PIX_FMT_YUV420P;
-
-    if (codec_id == AV_CODEC_ID_H264)
-        av_opt_set(c->priv_data, "preset", "slow", 0);
-
-    /* open it */
-    if (avcodec_open2(c, codec, NULL) < 0) {
-        fprintf(stderr, "Could not open codec\n");
-        exit(1);
-    }
-
-    f = fopen(filename, "wb");
-    if (!f) {
-        fprintf(stderr, "Could not open %s\n", filename);
-        exit(1);
-    }
-
-    _frame = av_frame_alloc();
-    if (!_frame) {
-        fprintf(stderr, "Could not allocate video frame\n");
-        exit(1);
-    }
-    _frame->format = c->pix_fmt;
-    _frame->width  = c->width;
-    _frame->height = c->height;
-
-    /* the image can be allocated by any means and av_image_alloc() is
-     * just the most convenient way if av_malloc() is to be used */
-    ret = av_image_alloc(_frame->data, _frame->linesize, c->width, c->height,
-                         c->pix_fmt, 32);
-    if (ret < 0) {
-        fprintf(stderr, "Could not allocate raw picture buffer\n");
-        exit(1);
-    }
-
-    /* encode 1 second of video */
-    for (i = 0; i < 30; i++) {
-        av_init_packet(&pkt);
-        pkt.data = NULL;    // packet data will be allocated by the encoder
-        pkt.size = 0;
-
-        fflush(stdout);
-        /* prepare a dummy image *///TODO this is where to add our data frames
-        /* Y */
-        for (y = 0; y < c->height; y++) {
-            for (x = 0; x < c->width; x++) {
-                _frame->data[0][y * _frame->linesize[0] + x] = x + y + i * 3;
-            }
-        }
-
-        /* Cb and Cr */
-        for (y = 0; y < c->height/2; y++) {
-            for (x = 0; x < c->width/2; x++) {
-                _frame->data[1][y * _frame->linesize[1] + x] = 128 + y + i * 2;
-                _frame->data[2][y * _frame->linesize[2] + x] = 64 + x + i * 5;
-            }
-        }
-
-        _frame->pts = i;
-
-        /* encode the image */
-        ret = avcodec_encode_video2(c, &pkt, _frame, &got_output);
-        if (ret < 0) {
-            fprintf(stderr, "Error encoding frame\n");
-            exit(1);
-        }
-
-        if (got_output) {
-            printf("Write frame %3d (size=%5d)\n", i, pkt.size);
-            fwrite(pkt.data, 1, pkt.size, f);
-            av_packet_unref(&pkt);
-        }
-    }
-
-    /* get the delayed frames */
-    for (got_output = 1; got_output; i++) {
-        fflush(stdout);
-
-        ret = avcodec_encode_video2(c, &pkt, NULL, &got_output);
-        if (ret < 0) {
-            fprintf(stderr, "Error encoding frame\n");
-            exit(1);
-        }
-
-        if (got_output) {
-            printf("Write frame %3d (size=%5d)\n", i, pkt.size);
-            fwrite(pkt.data, 1, pkt.size, f);
-            av_packet_unref(&pkt);
-        }
-    }
-
-    /* add sequence end code to have a real mpeg file */
-    fwrite(endcode, 1, sizeof(endcode), f);
-    fclose(f);
-
-    avcodec_close(c);
-    av_free(c);
-    av_freep(&_frame->data[0]);
-    av_frame_free(&_frame);
-    printf("\n");
-////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////
+    freeLater.push(imageToEncode);
     
+    for(int j = 0; j < 100; j++){
+    av_init_packet(&pkt);
+    pkt.data = NULL;    // packet data will be allocated by the encoder
+    pkt.size = 0;
+
+    fflush(stdout);
+    /*This may or may not work, depending on if the pixel formats 
+    are the same*/
+    
+    
+    struct SwsContext* convertCtx;
+    convertCtx = sws_getContext(256, 144, AV_PIX_FMT_RGB24, 256, 144, AV_PIX_FMT_YUV420P, SWS_FAST_BILINEAR, NULL, NULL, NULL);
+    
+    int tmp = 3*256;
+    sws_scale(convertCtx, (const uint8_t* const*) &(imageToEncode->pixels), &tmp, 0, 144, _frame->data, _frame->linesize);
+    
+    
+    _frame->pts = i++;
+
+    /* encode the image */
+    ret = avcodec_encode_video2(c, &pkt, _frame, &got_output);
+    
+    if (ret < 0) {
+      fprintf(stdout, "Error encoding frame\n");
+      exit(1);
+    }
+
+    if(got_output){
+      fflush(stdout);
+      fwrite(pkt.data, 1, pkt.size, stdout);
+      av_packet_unref(&pkt);
+      fprintf(stderr, "Added image\n"); fflush(stderr);
+    }
+    }
   }
+  
+  
+  /* get the delayed frames */
+  for (got_output = 1; got_output; i++) {
+    fflush(stdout);
+
+    ret = avcodec_encode_video2(c, &pkt, NULL, &got_output);
+    if (ret < 0) {
+      fprintf(stderr, "Error encoding frame\n");
+      exit(1);
+    }
+
+    if (got_output) {
+      fprintf(stderr, "Write frame %3d (size=%5d)\n", i, pkt.size);
+      fwrite(pkt.data, 1, pkt.size, stdout);
+      av_packet_unref(&pkt);
+      fprintf(stderr, "Added image\n"); fflush(stderr);
+    }
+  }
+  
+
+  /* add sequence end code to have a real mpeg file */
+  fwrite(endcode, 1, sizeof(endcode), stdout);
+  fclose(stdout);
+
+  avcodec_close(c);
+  av_free(c);
+  av_freep(&_frame->data[0]);
+  av_frame_free(&_frame);
+  
+  while(!freeLater.empty()){
+    SDL_DestroyTexture((SDL_Texture*) freeLater.front());
+    freeLater.pop();
+  }
+  
   encodeToVideoDone = true;
   return NULL;
 }
@@ -400,8 +419,8 @@ void *encodeToVideo(void *ignore){
 int main(int argc, char **arhv){
   
   //pthread_t threads[5];
-  int statuses[5];
-  char fake;
+  //int statuses[5];
+  //char fake;
   
   parseBytesOut = new queue<unsigned char>();
   bitsToFrameOut = new queue<frame*>();
@@ -434,7 +453,7 @@ int main(int argc, char **arhv){
   
   //for(int i = 0; i < 2; i++)
   //  pthread_join(threads[i], NULL);
-  SDL_Quit();
+  //SDL_Quit();
   
   delete parseBytesOut;
   delete bitsToFrameOut;
