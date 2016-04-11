@@ -22,12 +22,8 @@ extern "C" {
 
 using namespace std;
 
-//just to make allocating and deallocating easier
-class frame{
-  public:
-  unsigned char pixels[127][71][3];
-};
 
+typedef unsigned char u8;
 
 
 //The following queues are thread safe only because of the underlying
@@ -37,55 +33,13 @@ class frame{
 bool parseBytesDone = false;
 queue<unsigned char> *parseBytesOut;
 
-bool bitsToFrameDone = false;
-queue<frame*> *bitsToFrameOut;
-
-bool addIntegDone = false;
-queue<frame*> *addIntegOut;
+bool bitsToColorDone = false;
+queue<u8*> *bitsToColorOut;
 
 bool renderFramesDone = false;
 queue<SDL_Surface*> *renderFramesOut;
 
 bool encodeToVideoDone = false;
-
-//taken from http://sdl.beuc.net/sdl.wiki/Pixel_Access
-void putpixel(SDL_Surface *surface, int x, int y, Uint32 pixel){
-    int bpp = surface->format->BytesPerPixel;
-    /* Here p is the address to the pixel we want to set */
-    Uint8 *p = (Uint8 *)surface->pixels + y * surface->pitch + x * bpp;
-
-    switch(bpp) {
-    case 1:
-        *p = pixel;
-        break;
-
-    case 2:
-        *(Uint16 *)p = pixel;
-        break;
-
-    case 3:
-        if(SDL_BYTEORDER == SDL_BIG_ENDIAN) {
-            p[0] = (pixel >> 16) & 0xff;
-            p[1] = (pixel >> 8) & 0xff;
-            p[2] = pixel & 0xff;
-        } else {
-            p[0] = pixel & 0xff;
-            p[1] = (pixel >> 8) & 0xff;
-            p[2] = (pixel >> 16) & 0xff;
-        }
-        break;
-
-    case 4:
-        *(Uint32 *)p = pixel;
-        break;
-    }
-}
-
-
-
-
-
-
 
 
 
@@ -106,167 +60,94 @@ void *parseBytes(void *ignore){
 }
 
 
-void *bitsToFrame(void *ignore){
-  int i, j, k;
-  frame *curFrame = new frame();
+void *bitsToColor(void *ignore){
+  int i;
+  u8 *color = (u8*) malloc(sizeof(u8) * 3);
   
-  i = j = k = 0;
+  i = 0;
   
   while(!parseBytesDone || !parseBytesOut->empty()){
     if(parseBytesOut->empty()) continue;
     
-    curFrame->pixels[i][j][k] = parseBytesOut->front();
+    color[i++] = parseBytesOut->front();
     parseBytesOut->pop();
     
-    k++;
-    if(k >= 3){
-      k = 0;
-      j++;
-      if(j >= (71 - 1)){
-        j = 0;
-        i++;
-        if(i >= (127 - 1)){
-          i = 0;
-          bitsToFrameOut->push(curFrame);
-          curFrame = new frame();
-        }
-      }
+    if(i >= 3){
+      i = 0;
+      bitsToColorOut->push(color);
+      color = (u8*) malloc(sizeof(u8) * 3);
     }
      
   }
   
-  while(i || j || k){
-    curFrame->pixels[i][j][k] = 0;
-    k++;
-    if(k >= 3){
-      k = 0;
-      j++;
-      if(j >= (71 - 1)){
-        j = 0;
-        i++;
-        if(i >= (127 - 1)){
-          i = 0;
-          bitsToFrameOut->push(curFrame);
-          break;
-        }
-      }
-    }
+  if(i > 0){
+    for(;i < 3; i++)  color[i] = 0;
+    bitsToColorOut->push(color);
+  }else{
+    free(color);
   }
   
-  bitsToFrameDone = true;
+  bitsToColorDone = true;
+  
   return NULL;
 }
 
-
-void *addInteg(void *ignore){
-  while(!bitsToFrameDone || !bitsToFrameOut->empty()){
-    if(bitsToFrameOut->empty()) continue;
-    frame *toProcess = bitsToFrameOut->front();
-    bitsToFrameOut->pop();
-    
-    //[127][71][3];
-    for(int k = 0; k < 3; k++){
-      bool csum;
-      
-      #pragma omp for
-      for(int i = 0; i < (127-1); i++){
-        csum = false;
-        for(int j = 0; j < (71-1); j++){
-          csum = csum ^ (toProcess->pixels[i][j][k] != 0);
-        }
-        toProcess->pixels[i][(71-1)][k] = (csum * 255);
-      }
-      
-      #pragma omp for
-      for(int j = 0; j < (71-1); j++){
-        csum = false;
-        for(int i = 0; i < (127-1); i++){
-          csum = csum ^ (toProcess->pixels[i][j][k] != 0);
-        }
-        toProcess->pixels[(127-1)][j][k] = (csum * 255);
-      }
-      
-      
-      csum = false;
-      for(int j = 0; j < (71-1); j++){
-        csum = csum ^ (toProcess->pixels[(127-1)][j][k] != 0);
-      }
-      for(int i = 0; i < (127-1); i++){
-        csum = csum ^ (toProcess->pixels[i][(71-1)][k] != 0);
-      }
-      toProcess->pixels[(127-1)][(71-1)][k] = (csum * 255);
-    }
-    
-    addIntegOut->push(toProcess);
-  }
-  addIntegDone = true;
-  return NULL;
-}
-
-
-typedef unsigned char u8;
-
-
-Uint32 endianSafeBytemask(u8 r, u8 g, u8 b, u8 a){
-#if SDL_BYTEORDER == SDL_BIG_ENDIAN
-  return (r << 24) & (g << 16) & (b << 8) & (a << 0);
-#else
-  return (r << 0) & (g << 8) & (b << 16) & (a << 24);
-#endif
-}
 
 void *renderFrames(void *ignore){
-  fprintf(stderr, SDL_GetError()); fflush(stderr);
-  Uint32 windowFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN | SDL_WINDOW_BORDERLESS;
-  Uint32 rendererFlags = SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE;
-  //Uint32 windowFlags = 0;
-  //Uint32 rendererFlags = SDL_RENDERER_TARGETTEXTURE;
+  int x, y;
+  u8 *color;
+  SDL_Rect tmpRect;
+
   
+  x = y = 0;
+  tmpRect.h = 8;  tmpRect.w = 8;
+  Uint32 r, g, b, a;
+  #if SDL_BYTEORDER == SDL_BIG_ENDIAN
+    r = 0xff000000;
+    g = 0x00ff0000;
+    b = 0x0000ff00;
+    a = 0x000000ff;
+#else
+    r = 0x000000ff;
+    g = 0x0000ff00;
+    b = 0x00ff0000;
+    a = 0xff000000;
+#endif
+
+  SDL_Surface *image = SDL_CreateRGBSurface(0, 256, 144, 32, r , g, b, a);
   
-  SDL_Window *renderContext = SDL_CreateWindow("", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1, 1, windowFlags);
-  fprintf(stderr, SDL_GetError()); fflush(stderr);
-  
-  SDL_Renderer *renderer = SDL_CreateRenderer(renderContext, -1, rendererFlags);
-  fprintf(stderr, SDL_GetError()); fflush(stderr);
-  
-  //*
-  while(!addIntegDone || !addIntegOut->empty()){
-    if(addIntegOut->empty()) continue;
+  while(!bitsToColorDone || !bitsToColorOut->empty()){
+    if(bitsToColorOut->empty()) continue;
     
-    frame *rawFrame = addIntegOut->front();
-    addIntegOut->pop();
+    color = bitsToColorOut->front();
+    bitsToColorOut->pop();
+    
+    tmpRect.x = x;  tmpRect.y = y;
+    SDL_FillRect(image, &tmpRect, SDL_MapRGB(image->format, color[0], color[1], color[2]));
+    free(color);
     
     
-    SDL_Surface *image = SDL_CreateRGBSurface(0, 256, 144, 32, 0, 0, 0, 0xff);
-    fprintf(stderr, SDL_GetError()); fflush(stderr);
-    
-    for(int i = 0; i < 127; i++){
-      for(int j = 0; j < 71; j++){
-        Uint32 newPixel;
-        newPixel = endianSafeBytemask(rawFrame->pixels[i][j][0], 
-                                      rawFrame->pixels[i][j][1], 
-                                      rawFrame->pixels[i][j][2], 
-                                      0xff);
-        SDL_LockSurface(image);
-        putpixel(image, 1 + 2*i, 1 + 2+j, newPixel);
-        SDL_UnlockSurface(image);
+    x += 8;
+    if(x >= 256){
+      x = 0;
+      y += 8;
+      if(y >= 144){
+        y = 0;
+        renderFramesOut->push(image);
+        image = SDL_CreateRGBSurface(0, 256, 144, 32, r , g, b, a);
       }
     }
-    
-    delete rawFrame;
-    SDL_RenderClear( renderer );
-    fprintf(stderr, SDL_GetError()); fflush(stderr);
-    //SDL_Surface *YUVSurface = SDL_ConvertSurfaceFormat(image, SDL_PIXELFORMAT_IYUV, 0);
-    //SDL_FreeSurface(image);
-    renderFramesOut->push(image);
-    
   }
-  /* */
+  
+  if(x || y){
+    renderFramesOut->push(image);
+  }else{
+    SDL_FreeSurface(image);
+  }
+  
   renderFramesDone = true;
   
-  SDL_DestroyRenderer(renderer);
-  SDL_DestroyWindow(renderContext);
-  fprintf(stderr, SDL_GetError()); fflush(stderr);
+  
   
   return NULL;
 }
@@ -341,7 +222,6 @@ void *encodeToVideo(void *ignore){
     renderFramesOut->pop();
     freeLater.push(imageToEncode);
     
-    for(int j = 0; j < 100; j++){
     av_init_packet(&pkt);
     pkt.data = NULL;    // packet data will be allocated by the encoder
     pkt.size = 0;
@@ -352,11 +232,13 @@ void *encodeToVideo(void *ignore){
     
     
     struct SwsContext* convertCtx;
-    convertCtx = sws_getContext(256, 144, AV_PIX_FMT_RGB24, 256, 144, AV_PIX_FMT_YUV420P, SWS_FAST_BILINEAR, NULL, NULL, NULL);
+    convertCtx = sws_getContext(256, 144, AV_PIX_FMT_RGB24, 
+                                256, 144, AV_PIX_FMT_YUV420P, 0, 0, 0, 0);
     
-    int tmp = 3*256;
-    sws_scale(convertCtx, (const uint8_t* const*) &(imageToEncode->pixels), &tmp, 0, 144, _frame->data, _frame->linesize);
-    
+    uint8_t *inData[1] = {(uint8_t *)(imageToEncode->pixels)};
+    int inLinesize[1] = { 256 };
+    sws_scale(convertCtx, inData, inLinesize, 0, 144, _frame->data, _frame->linesize);
+    sws_freeContext(convertCtx);
     
     _frame->pts = i++;
 
@@ -372,9 +254,8 @@ void *encodeToVideo(void *ignore){
       fflush(stdout);
       fwrite(pkt.data, 1, pkt.size, stdout);
       av_packet_unref(&pkt);
-      fprintf(stderr, "Added image\n"); fflush(stderr);
     }
-    }
+    
   }
   
   
@@ -392,7 +273,6 @@ void *encodeToVideo(void *ignore){
       fprintf(stderr, "Write frame %3d (size=%5d)\n", i, pkt.size);
       fwrite(pkt.data, 1, pkt.size, stdout);
       av_packet_unref(&pkt);
-      fprintf(stderr, "Added image\n"); fflush(stderr);
     }
   }
   
@@ -403,16 +283,28 @@ void *encodeToVideo(void *ignore){
 
   avcodec_close(c);
   av_free(c);
-  av_freep(&_frame->data[0]);
+  av_freep(_frame->data);
   av_frame_free(&_frame);
   
   while(!freeLater.empty()){
-    SDL_DestroyTexture((SDL_Texture*) freeLater.front());
+    SDL_FreeSurface(freeLater.front());
     freeLater.pop();
   }
   
   encodeToVideoDone = true;
   return NULL;
+}
+
+
+void debugFreeQueues(){
+  while(!bitsToColorOut->empty()){
+    free(bitsToColorOut->front());
+    bitsToColorOut->pop();
+  }
+  while(!renderFramesOut->empty()){
+    SDL_FreeSurface(renderFramesOut->front());
+    renderFramesOut->pop();
+  }
 }
 
 
@@ -422,19 +314,18 @@ int main(int argc, char **arhv){
   //int statuses[5];
   //char fake;
   
-  parseBytesOut = new queue<unsigned char>();
-  bitsToFrameOut = new queue<frame*>();
-  addIntegOut = new queue<frame*>();
+  parseBytesOut = new queue<u8>();
+  bitsToColorOut = new queue<u8*>();
   renderFramesOut = new queue<SDL_Surface*>();
   
   
   //Initialize SDL
-  if (SDL_Init(SDL_INIT_VIDEO) < 0)  {
-    printf("SDL could not initialize! SDL Error: %s\n", SDL_GetError());
-    exit(-1);
-  }
+  //if (SDL_Init(SDL_INIT_VIDEO) < 0)  {
+  //  printf("SDL could not initialize! SDL Error: %s\n", SDL_GetError());
+  //  exit(-1);
+  //}
   //Set texture filtering to linear
-  SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
+  //SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
   
   //*
   //statuses[0] = pthread_create( &threads[0], NULL, parseBytes, (void*) &fake);
@@ -446,8 +337,7 @@ int main(int argc, char **arhv){
   
   
   parseBytes(NULL);
-  bitsToFrame(NULL);
-  addInteg(NULL);
+  bitsToColor(NULL);
   renderFrames(NULL);
   encodeToVideo(NULL);
   
@@ -456,8 +346,7 @@ int main(int argc, char **arhv){
   //SDL_Quit();
   
   delete parseBytesOut;
-  delete bitsToFrameOut;
-  delete addIntegOut;
+  delete bitsToColorOut;
   delete renderFramesOut;
   
   return 0;
