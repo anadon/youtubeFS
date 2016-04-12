@@ -10,6 +10,7 @@ extern "C" {
 #include <libavutil/common.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/mathematics.h>
+#include <libavutil/pixfmt.h>
 #include <libavutil/samplefmt.h>
 #include <libswscale/swscale.h>
 }
@@ -232,11 +233,11 @@ void *encodeToVideo(void *ignore){
     
     
     struct SwsContext* convertCtx;
-    convertCtx = sws_getContext(256, 144, AV_PIX_FMT_RGB24, 
+    convertCtx = sws_getContext(256, 144, AV_PIX_FMT_RGB32, 
                                 256, 144, AV_PIX_FMT_YUV420P, 0, 0, 0, 0);
     
     uint8_t *inData[1] = {(uint8_t *)(imageToEncode->pixels)};
-    int inLinesize[1] = { 256 };
+    int inLinesize[1] = { 4*256 };
     sws_scale(convertCtx, inData, inLinesize, 0, 144, _frame->data, _frame->linesize);
     sws_freeContext(convertCtx);
     
