@@ -7,7 +7,8 @@ CFLAGS = -pipe -march=native -fpic -Ofast
 
 
 HEADERS = 
-SOURCE = encode.cpp
+ENCODE_SOURCE = encode.cpp
+DECODE_SOURCE = decode.cpp
 
 OBJECTS = suffixarray.o
 OBJECTS_DEBUG = suffixarray-debug.o
@@ -18,6 +19,7 @@ OBJECTS_DEBUG = suffixarray-debug.o
 ##STANDARD BUILD########################################################
 
 all : $(SOURCE)
-	$(CPP) $(CFLAGS_DEBUG) $(LIBRARIES) $(SOURCE)
+	$(CPP) $(CFLAGS_DEBUG) $(LIBRARIES) $(ENCODE_SOURCE) -o encode
+	$(CPP) $(CFLAGS_DEBUG) $(LIBRARIES) $(DECODE_SOURCE) -o decode
 
 
