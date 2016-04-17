@@ -159,14 +159,14 @@ void decodeVideoToFrames(){
   }
     
   /* put sample parameters */
-  c->bit_rate = 400000;
-  c->width = 256;
-  c->height = 144;
-  c->time_base = (AVRational){1,30}; /* frames per second */
-  c->gop_size = 1; /* emit one intra frame every frames*/
-  c->max_b_frames = 0;
-  c->pix_fmt = AV_PIX_FMT_YUV420P;
-  c->delay = 0;
+  //~ c->bit_rate = 400000;
+  //~ c->width = 256;
+  //~ c->height = 144;
+  //~ c->time_base = (AVRational){1,30}; /* frames per second */
+  //~ c->gop_size = 1; /* emit one intra frame every frames*/
+  //~ c->max_b_frames = 0;
+  //~ c->pix_fmt = AV_PIX_FMT_YUV420P;
+  //~ c->delay = 0;
 
   av_opt_set(c->priv_data, "zerolatency", "veryfast", 0);
 
@@ -180,80 +180,231 @@ void decodeVideoToFrames(){
   _frame->format = c->pix_fmt;
   _frame->width  = c->width;
   _frame->height = c->height;
-
-  ret = av_image_alloc(_frame->data, _frame->linesize, c->width, 
-      c->height, c->pix_fmt, 32);
-  if (ret < 0) {
-    fprintf(stderr, "Could not allocate raw picture buffer\n");
-    exit(1);
-  }
-  
-  while(!renderFramesOut.empty()){
-    SDL_Surface *imageToEncode = renderFramesOut.front();
-    renderFramesOut.pop();
-    freeLater.push(imageToEncode);
-    
-    av_init_packet(&pkt);
-    pkt.data = NULL;    // packet data will be allocated by the encoder
-    pkt.size = 0;
-
-    fflush(stdout);
-    /*This may or may not work, depending on if the pixel formats 
-    are the same*/
-    
-    
-    struct SwsContext* convertCtx;
-    convertCtx = sws_getContext(256, 144, AV_PIX_FMT_RGB32, 
-                                256, 144, AV_PIX_FMT_YUV420P, 0, 0, 0, 0);
-    
-    uint8_t *inData[1] = {(uint8_t *)(imageToEncode->pixels)};
-    int inLinesize[1] = { 4*256 };
-    sws_scale(convertCtx, inData, inLinesize, 0, 144, _frame->data, _frame->linesize);
-    sws_freeContext(convertCtx);
-    
-    _frame->pts = i++;
-
-    /* encode the image */
-    ret = avcodec_encode_video2(c, &pkt, _frame, &got_output);
-
-    if(got_output){
-      fflush(stdout);
-      fwrite(pkt.data, 1, pkt.size, stdout);
-      av_packet_unref(&pkt);
-    }
-    
-  }
+	while(av_read_frame(c , *pkt)){
+		avcodec_decode_video2( c, _frame, got_output, pkt)
+		//addframe to queue
+		
+		
+	}
+  //~ ret = av_image_alloc(_frame->data, _frame->linesize, c->width, 
+      //~ c->height, c->pix_fmt, 32);
+  //~ if (ret < 0) {
+    //~ fprintf(stderr, "Could not allocate raw picture buffer\n");
+    //~ exit(1);
+  //~ }
+  //~ 
+  //~ while(!renderFramesOut.empty()){
+    //~ SDL_Surface *imageToEncode = renderFramesOut.front();
+    //~ renderFramesOut.pop();
+    //~ freeLater.push(imageToEncode);
+    //~ 
+    //~ av_init_packet(&pkt);
+    //~ pkt.data = NULL;    // packet data will be allocated by the encoder
+    //~ pkt.size = 0;
+//~ 
+    //~ fflush(stdout);
+    //~ /*This may or may not work, depending on if the pixel formats 
+    //~ are the same*/
+    //~ 
+    //~ 
+    //~ struct SwsContext* convertCtx;
+    //~ convertCtx = sws_getContext(256, 144, AV_PIX_FMT_RGB32, 
+                                //~ 256, 144, AV_PIX_FMT_YUV420P, 0, 0, 0, 0);
+    //~ 
+    //~ uint8_t *inData[1] = {(uint8_t *)(imageToEncode->pixels)};
+    //~ int inLinesize[1] = { 4*256 };
+    //~ sws_scale(convertCtx, inData, inLinesize, 0, 144, _frame->data, _frame->linesize);
+    //~ sws_freeContext(convertCtx);
+    //~ 
+    //~ _frame->pts = i++;
+//~ 
+    //~ /* encode the image */
+    //~ ret = avcodec_encode_video2(c, &pkt, _frame, &got_output);
+//~ 
+    //~ if(got_output){
+      //~ fflush(stdout);
+      //~ fwrite(pkt.data, 1, pkt.size, stdout);
+      //~ av_packet_unref(&pkt);
+    //~ }
+    //~ 
+  //~ }
   
   
   /* get the delayed frames */
-  got_output = 1;
-  while (got_output) {
-
-    ret = avcodec_encode_video2(c, &pkt, NULL, &got_output);
-
-    if (got_output) {
-      fflush(stdout);
-      fwrite(pkt.data, 1, pkt.size, stdout);
-      av_packet_unref(&pkt);
-    }
-  }
-  
-
-  /* add sequence end code to have a real mpeg file */
-  fwrite(endcode, 1, sizeof(endcode), stdout);
-  fclose(stdout);
-
-  avcodec_close(c);
-  av_free(c);
-  av_freep(_frame->data);
-  av_frame_free(&_frame);
-  
-  while(!freeLater.empty()){
-    SDL_FreeSurface(freeLater.front());
-    freeLater.pop();
-  }
+  //~ got_output = 1;
+  //~ while (got_output) {
+//~ 
+    //~ ret = avcodec_encode_video2(c, &pkt, NULL, &got_output);
+//~ 
+    //~ if (got_output) {
+      //~ fflush(stdout);
+      //~ fwrite(pkt.data, 1, pkt.size, stdout);
+      //~ av_packet_unref(&pkt);
+    //~ }
+  //~ }
+  //~ 
+//~ 
+  //~ /* add sequence end code to have a real mpeg file */
+  //~ fwrite(endcode, 1, sizeof(endcode), stdout);
+  //~ fclose(stdout);
+//~ 
+  //~ avcodec_close(c);
+  //~ av_free(c);
+  //~ av_freep(_frame->data);
+  //~ av_frame_free(&_frame);
+  //~ 
+  //~ while(!freeLater.empty()){
+    //~ SDL_FreeSurface(freeLater.front());
+    //~ freeLater.pop();
+  //~ }
   
 }
+
+
+
+
+
+
+static void video_decode_example(const char *outfilename, const char *filename)
+{
+    AVCodec *codec;
+    AVCodecContext *c= NULL;
+    int frame_count;
+    FILE *f;
+    AVFrame *frame;
+    uint8_t inbuf[INBUF_SIZE + AV_INPUT_BUFFER_PADDING_SIZE];
+    AVPacket avpkt;
+
+    av_init_packet(&avpkt);
+
+    /* set end of buffer to 0 (this ensures that no overreading happens for damaged mpeg streams) */
+    memset(inbuf + INBUF_SIZE, 0, AV_INPUT_BUFFER_PADDING_SIZE);
+
+    printf("Decode video file %s to %s\n", filename, outfilename);
+
+    /* find the mpeg1 video decoder */
+    codec = avcodec_find_decoder(AV_CODEC_ID_MPEG1VIDEO);
+    if (!codec) {
+        fprintf(stderr, "Codec not found\n");
+        exit(1);
+    }
+
+    c = avcodec_alloc_context3(codec);
+    if (!c) {
+        fprintf(stderr, "Could not allocate video codec context\n");
+        exit(1);
+    }
+
+    if (codec->capabilities & AV_CODEC_CAP_TRUNCATED)
+        c->flags |= AV_CODEC_FLAG_TRUNCATED; // we do not send complete frames
+
+    /* For some codecs, such as msmpeg4 and mpeg4, width and height
+       MUST be initialized there because this information is not
+       available in the bitstream. */
+
+    /* open it */
+    if (avcodec_open2(c, codec, NULL) < 0) {
+        fprintf(stderr, "Could not open codec\n");
+        exit(1);
+    }
+
+    f = stdin;
+    if (!f) {
+        fprintf(stderr, "Could not open %s\n", filename);
+        exit(1);
+    }
+
+    frame = av_frame_alloc();
+    if (!frame) {
+        fprintf(stderr, "Could not allocate video frame\n");
+        exit(1);
+    }
+
+    frame_count = 0;
+    for (;;) {
+        avpkt.size = fread(inbuf, 1, INBUF_SIZE, f);
+        if (avpkt.size == 0)
+            break;
+
+        /* NOTE1: some codecs are stream based (mpegvideo, mpegaudio)
+           and this is the only method to use them because you cannot
+           know the compressed data size before analysing it.
+           BUT some other codecs (msmpeg4, mpeg4) are inherently frame
+           based, so you must call them with all the data for one
+           frame exactly. You must also initialize 'width' and
+           'height' before initializing them. */
+
+        /* NOTE2: some codecs allow the raw parameters (frame size,
+           sample rate) to be changed at any frame. We handle this, so
+           you should also take care of it */
+
+        /* here, we use a stream based decoder (mpeg1video), so we
+           feed decoder and see if it could decode a frame */
+        avpkt.data = inbuf;
+        while (avpkt.size > 0)
+            if (decode_write_frame(outfilename, c, frame, &frame_count, &avpkt, 0) < 0)
+                exit(1);
+    }
+
+    /* some codecs, such as MPEG, transmit the I and P frame with a
+       latency of one frame. You must do the following to have a
+       chance to get the last frame of the video */
+    avpkt.data = NULL;
+    avpkt.size = 0;
+    decode_write_frame(outfilename, c, frame, &frame_count, &avpkt, 1);
+
+    fclose(f);
+
+    avcodec_close(c);
+    av_free(c);
+    av_frame_free(&frame);
+    printf("\n");
+}
+
+
+
+
+
+static int decode_write_frame(const char *outfilename, AVCodecContext *avctx,
+                              AVFrame *frame, int *frame_count, AVPacket *pkt, int last)
+{
+    int len, got_frame;
+    char buf[1024];
+
+    len = avcodec_decode_video2(avctx, frame, &got_frame, pkt);
+    if (len < 0) {
+        fprintf(stderr, "Error while decoding frame %d\n", *frame_count);
+        return len;
+    }
+    if (got_frame) {
+        printf("Saving %sframe %3d\n", last ? "last " : "", *frame_count);
+        fflush(stdout);
+
+		struct SwsContext* convertCtx;
+		convertCtx = sws_getContext(256, 144, AV_PIX_FMT_YUV420P, 
+									256, 144, AV_PIX_FMT_RGB32, 0, 0, 0, 0);
+    
+		uint8_t *outData[1] = malloc(144*256*4);
+		int outLinesize;
+		sws_scale(convertCtx, frame->data, frame->linesize, 0, 144, outData, &outLinesize);
+		sws_freeContext(convertCtx);
+
+        /* the picture is allocated by the decoder, no need to free it */
+        snprintf(buf, sizeof(buf), outfilename, *frame_count);
+        pgm_save(frame->data[0], frame->linesize[0],
+                 frame->width, frame->height, buf);
+        (*frame_count)++;
+    }
+    if (pkt->data) {
+        pkt->size -= len;
+        pkt->data += len;
+    }
+    return 0;
+}
+
+int 	sws_scale (struct SwsContext *c, const uint8_t *const srcSlice[], const int srcStride[], int srcSliceY, int srcSliceH, uint8_t *const dst[], const int dstStride[])
+ 	Scale the image slice in srcSlice and put the resulting scaled slice in the image in dst. 
+
 
 
 //NOTE: the fileSize assignment is incorrect across different endian
