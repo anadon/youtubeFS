@@ -2,3 +2,4 @@ a.out
 *.mp4
 encode
 decode
+client_secrets.json
